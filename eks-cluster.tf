@@ -44,6 +44,15 @@ module "eks" {
       instance_type = "p3.2xlarge"
     }
   }
+
+  workers_additional_policies = [aws_iam_policy.worker_policy.arn]
+}
+
+resource "aws_iam_policy" "worker_policy" {
+  name        = "worker-policy"
+  description = "Worker policy for the ALB Ingress"
+
+  policy = file("iam-policy.json")
 }
 
 data "aws_eks_cluster" "cluster" {
