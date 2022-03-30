@@ -45,15 +45,15 @@ module "eks" {
     }
   }
 
-  workers_additional_policies = [aws_iam_policy.worker_policy.arn]
+  #workers_additional_policies = [aws_iam_policy.worker_policy.arn]
 }
 
-resource "aws_iam_policy" "worker_policy" {
-  name        = "worker-policy"
-  description = "Worker policy for the ALB Ingress"
-
-  policy = file("iam-policy.json")
-}
+#resource "aws_iam_policy" "worker_policy" {
+#  name        = "worker-policy"
+#  description = "Worker policy for the ALB Ingress"
+#
+#  policy = file("iam_policy.json")
+#}
 
 data "aws_eks_cluster" "cluster" {
   name = module.eks.cluster_id
@@ -61,4 +61,56 @@ data "aws_eks_cluster" "cluster" {
 
 data "aws_eks_cluster_auth" "cluster" {
   name = module.eks.cluster_id
+}
+
+data "tls_certificate" "eks_certificate" {
+  url = module.eks.cluster_oidc_issuer_url
+}
+
+resource "aws_iam_openid_connect_provider" "eks_oidcp" {
+  url = module.eks.cluster_oidc_issuer_url
+
+  client_id_list = [
+    "sts.amazonaws.com"
+  ]
+  # use different thumbprint for different region
+  # https://docs.aws.amazon.com/ja_jp/IAM/latest/UserGuide/id_roles_providers_create_oidc_verify-thumbprint.html
+  thumbprint_list = [data.tls_certificate.eks_certificate.certificates.0.sha1_fingerprint]
+}
+
+resource "aws_iam_role" "airflow_log_role" {
+  name = "airflow_eks_log_role"
+
+  assume_role_policy = <<EOS
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+          "Federated": "${aws_iam_openid_connect_provider.eks_oidcp.arn}"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "${aws_iam_openid_connect_provider.eks_oidcp.url}:aud": "sts.amazonaws.com"
+        }
+      }
+    }
+  ]
+}
+EOS
+}
+
+
+resource "kubernetes_service_account" "airflow" {
+  metadata {
+    name      = "airflow-sa"
+    namespace = "airflow"
+    annotations = {
+      "eks.amazonaws.com/role-arn" = aws_iam_role.airflow_log_role.arn
+    }
+  }
+
+  automount_service_account_token = true
 }
